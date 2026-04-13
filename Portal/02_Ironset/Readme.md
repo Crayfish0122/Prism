@@ -1,4 +1,4 @@
-# Chief of Staff — 健身训练与日程管理系统
+# Head Fitness Coach — 健身训练与日程管理系统
 
 个人体态重组（Body Recomposition）项目，由 Claude 担任 Chief of Staff，统筹管理力量训练、营养追踪、睡眠恢复与工作日程。
 
