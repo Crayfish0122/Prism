@@ -1,0 +1,175 @@
+// ════════════════════════════════════════════════════════════
+//  Health_Nutrition_Sync.gs  —  营养数据同步
+//  純粋なツール関数は全て utils.gs に移譲済み
+// ════════════════════════════════════════════════════════════
+
+// ── 主入口 ───────────────────────────────────────────────────
+
+function HealthNutritionSync() {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+
+  try {
+    const tz        = CONFIG.TZ;
+    const target    = getYesterdayInTz();
+    const targetStr = ymd(target);
+
+    Logger.log("===== 开始营养同步 =====");
+    Logger.log(`执行时间(东京): ${Utilities.formatDate(new Date(), tz, "yyyy-MM-dd HH:mm:ss")}`);
+    Logger.log(`目标日期(前一天): ${targetStr}`);
+
+    const tempName = `_TEMP_NUTRITION_${targetStr}`;
+    const tempSSId = driveCopyAsGoogleSheet(CONFIG.TARGET.xlsxFileId, tempName);
+
+    try {
+      const tempSS       = openSpreadsheetWithRetry(tempSSId, CONFIG.TARGET.openRetryTimes, CONFIG.TARGET.openRetrySleepMs);
+      const srcSS        = openSpreadsheetWithRetry(CONFIG.NUTRITION_SRC.googleSheetId, CONFIG.TARGET.openRetryTimes, CONFIG.TARGET.openRetrySleepMs);
+      const mealSheet    = getSheetStrict(srcSS, CONFIG.NUTRITION_SRC.mealSheetName);
+      const targetSheet  = getSheetStrict(srcSS, CONFIG.NUTRITION_SRC.nutritionTargetSheetName);
+      const summarySheet = getSheetStrict(tempSS, CONFIG.TARGET.summarySheetName);
+
+      const actual = getNutritionActual(mealSheet, targetStr);
+      if (!actual) {
+        Logger.log("目标日期营养没有数据，跳过");
+        return;
+      }
+      Logger.log(`实际营养: kcal=${actual.kcal} carb=${actual.carb} protein=${actual.protein} fat=${actual.fat}`);
+
+      const colMap     = getColMapFromHeader(summarySheet, 1);
+      const isTraining = getIsTrainingDay(summarySheet, targetStr, colMap, tz);
+      Logger.log(`训练日判断: ${isTraining ? "训练日" : "非训练日"}`);
+
+      const targetNutrition = getNutritionTarget(targetSheet, targetStr, isTraining);
+      Logger.log(`目标营养: kcal=${targetNutrition.kcal} carb=${targetNutrition.carb} protein=${targetNutrition.protein} fat=${targetNutrition.fat}`);
+
+      const totalStr = formatNutritionTotal(actual);
+      const deltaStr = formatNutritionDelta(actual, targetNutrition);
+      Logger.log(`nutrition_total: ${totalStr}`);
+      Logger.log(`nutrition_delta: ${deltaStr}`);
+
+      writeNutritionToSummary(summarySheet, targetStr, totalStr, deltaStr, colMap, tz);
+      SpreadsheetApp.flush();
+
+      const blob = exportSpreadsheetAsXlsx(tempSSId, getXlsxFileName(CONFIG.TARGET.xlsxFileId));
+      driveUpdateBinary(CONFIG.TARGET.xlsxFileId, blob);
+      syncTempSSToGoogleSheet(tempSSId);
+      Logger.log("✅ 已覆盖写回原xlsx文件");
+      Logger.log("===== 营养同步完成 =====");
+    } finally {
+      DriveApp.getFileById(tempSSId).setTrashed(true);
+    }
+  } finally {
+    try { lock.releaseLock(); } catch (e) {}
+  }
+}
+
+// ── 触发器 ───────────────────────────────────────────────────
+
+function createDailyTriggerAt3() {
+  const exists = ScriptApp.getProjectTriggers().some(
+    t => t.getHandlerFunction() === "HealthNutritionSync"
+  );
+  if (exists) {
+    Logger.log("ℹ️ 已存在 HealthNutritionSync 的触发器，不重复创建");
+    return;
+  }
+  ScriptApp.newTrigger("HealthNutritionSync")
+    .timeBased()
+    .atHour(3)
+    .nearMinute(0)
+    .everyDays(1)
+    .inTimezone(CONFIG.TZ)
+    .create();
+  Logger.log("✅ 已创建每日触发器（JST 03:00 附近执行）");
+}
+
+// ── 营养实际值聚合 ────────────────────────────────────────────
+
+function getNutritionActual(mealSheet, dateStr) {
+  const lastRow = mealSheet.getLastRow();
+  if (lastRow < 2) return null;
+
+  const values = mealSheet.getRange(2, 1, lastRow - 1, 6).getValues();
+  let kcal = 0, carb = 0, protein = 0, fat = 0, hit = 0;
+
+  for (const row of values) {
+    const rowDate = normalizeDateKey(row[0]);
+    if (rowDate !== dateStr) continue;
+    kcal    += toNum(row[2]) || 0;
+    carb    += toNum(row[3]) || 0;
+    protein += toNum(row[4]) || 0;
+    fat     += toNum(row[5]) || 0;
+    hit++;
+  }
+
+  return hit ? { kcal, carb, protein, fat } : null;
+}
+
+// ── 训练日判断 ────────────────────────────────────────────────
+
+function getIsTrainingDay(summarySheet, dateStr, colMap, tz) {
+  const row = findSummaryRowByDate_(summarySheet, dateStr, colMap, tz);
+  if (!row) return false;
+  const workoutFeedback = String(summarySheet.getRange(row, colOf_(colMap, CONFIG.SUMMARY_COLS.workoutFeedback)).getValue() || "").trim();
+  return workoutFeedback.startsWith("训练日");
+}
+
+// ── 营养目标值读取 ────────────────────────────────────────────
+
+function getNutritionTarget(targetSheet, dateStr, isTraining) {
+  const lastRow = targetSheet.getLastRow();
+  if (lastRow < 2) throw new Error("nutrition_target_config 无数据");
+
+  const values  = targetSheet.getRange(2, 1, lastRow - 1, 6).getValues();
+  const type    = isTraining ? "training" : "rest";
+  let best      = null;
+  let bestDate  = "";
+
+  for (const row of values) {
+    const rowDate = normalizeDateKey(row[0]);
+    const rowType = String(row[1] || "").trim();
+    if (rowType !== type) continue;
+    if (rowDate > dateStr) continue;
+    if (rowDate > bestDate) {
+      bestDate = rowDate;
+      best     = { kcal: toNum(row[2]), carb: toNum(row[3]), protein: toNum(row[4]), fat: toNum(row[5]) };
+    }
+  }
+
+  if (!best) throw new Error(`找不到 ${dateStr} 对应的营养目标 (type=${type})`);
+  return best;
+}
+
+// ── フォーマット ─────────────────────────────────────────────
+
+function formatNutritionTotal(actual) {
+  return [actual.kcal, actual.carb, actual.protein, actual.fat]
+    .map(v => v.toFixed(1))
+    .join("|");
+}
+
+function formatNutritionDelta(actual, target) {
+  return [
+    actual.kcal    - target.kcal,
+    actual.carb    - target.carb,
+    actual.protein - target.protein,
+    actual.fat     - target.fat
+  ].map(v => {
+    const fixed = Math.abs(v).toFixed(1);
+    return v < 0 ? `(${fixed})` : fixed;
+  }).join("|");
+}
+
+// ── 营养写入 ──────────────────────────────────────────────────
+
+function writeNutritionToSummary(summarySheet, dateStr, totalStr, deltaStr, colMap, tz) {
+  const row = findSummaryRowByDate_(summarySheet, dateStr, colMap, tz);
+  if (!row) throw new Error(`Summarize 未找到日期行: ${dateStr}`);
+
+  summarySheet.getRange(row, colOf_(colMap, CONFIG.SUMMARY_COLS.nutritionTotal)).setValue(totalStr);
+  summarySheet.getRange(row, colOf_(colMap, CONFIG.SUMMARY_COLS.nutritionDelta)).setValue(deltaStr);
+  Logger.log(`✅ 营养写入 row:${row} total=${totalStr} delta=${deltaStr}`);
+}
+
+// ── Summarize 日付行検索 ──────────────────────────────────────
+
