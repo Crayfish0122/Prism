@@ -3,6 +3,14 @@
 //  純粋なツール関数は全て utils.gs に移譲済み
 // ════════════════════════════════════════════════════════════
 
+const NUTRITION_RAW_COL = {
+  ROW_KEY:           1,
+  DATE:              2,
+  CALENDAR_EVENT_ID: 3,
+  CALENDAR_SYNCED:   4,
+  UPDATED_AT:        5,
+};
+
 // ── 主入口 ───────────────────────────────────────────────────
 
 function HealthNutritionSync() {
@@ -22,11 +30,12 @@ function HealthNutritionSync() {
     const tempSSId = driveCopyAsGoogleSheet(CONFIG.TARGET.xlsxFileId, tempName);
 
     try {
-      const tempSS       = openSpreadsheetWithRetry(tempSSId, CONFIG.TARGET.openRetryTimes, CONFIG.TARGET.openRetrySleepMs);
-      const srcSS        = openSpreadsheetWithRetry(CONFIG.NUTRITION_SRC.googleSheetId, CONFIG.TARGET.openRetryTimes, CONFIG.TARGET.openRetrySleepMs);
-      const mealSheet    = getSheetStrict(srcSS, CONFIG.NUTRITION_SRC.mealSheetName);
-      const targetSheet  = getSheetStrict(srcSS, CONFIG.NUTRITION_SRC.nutritionTargetSheetName);
-      const summarySheet = getSheetStrict(tempSS, CONFIG.TARGET.summarySheetName);
+      const tempSS            = openSpreadsheetWithRetry(tempSSId, CONFIG.TARGET.openRetryTimes, CONFIG.TARGET.openRetrySleepMs);
+      const srcSS             = openSpreadsheetWithRetry(CONFIG.NUTRITION_SRC.googleSheetId, CONFIG.TARGET.openRetryTimes, CONFIG.TARGET.openRetrySleepMs);
+      const mealSheet         = getSheetStrict(srcSS, CONFIG.NUTRITION_SRC.mealSheetName);
+      const targetSheet       = getSheetStrict(srcSS, CONFIG.NUTRITION_SRC.nutritionTargetSheetName);
+      const summarySheet      = getSheetStrict(tempSS, CONFIG.TARGET.summarySheetName);
+      const nutritionRawSheet = getSheetStrict(tempSS, CONFIG.TARGET.nutritionRawSheetName);
 
       const actual = getNutritionActual(mealSheet, targetStr);
       if (!actual) {
@@ -48,6 +57,11 @@ function HealthNutritionSync() {
       Logger.log(`nutrition_delta: ${deltaStr}`);
 
       writeNutritionToSummary(summarySheet, targetStr, totalStr, deltaStr, colMap, tz);
+
+      const todayStr = ymd(getTodayInTz());
+      writebackNutritionEvent_(nutritionRawSheet, summarySheet, targetStr, totalStr, deltaStr, colMap, tz);
+      createNutritionShellEvent_(nutritionRawSheet, todayStr, tz);
+
       SpreadsheetApp.flush();
 
       const blob = exportSpreadsheetAsXlsx(tempSSId, getXlsxFileName(CONFIG.TARGET.xlsxFileId));
@@ -171,5 +185,120 @@ function writeNutritionToSummary(summarySheet, dateStr, totalStr, deltaStr, colM
   Logger.log(`✅ 营养写入 row:${row} total=${totalStr} delta=${deltaStr}`);
 }
 
-// ── Summarize 日付行検索 ──────────────────────────────────────
+// ── 回写前一天 nutrition event ──────────────────────────────────
 
+function writebackNutritionEvent_(nutritionRawSheet, summarySheet, dateStr, totalStr, deltaStr, colMap, tz) {
+  Logger.log(`nutritionWriteback: 开始回写 ${dateStr}`);
+
+  const cal = CalendarApp.getCalendarById(CONFIG.NUTRITION.calendarId);
+  if (!cal) {
+    Logger.log("nutritionWriteback: 找不到营养日历，跳过");
+    return;
+  }
+
+  const rowKey = dateStr.replace(/-/g, "");
+  const rawRow = findOrInsertRowByKey_(nutritionRawSheet, rowKey, NUTRITION_RAW_COL.ROW_KEY, 2);
+  const oldEventId = rawRow.inserted ? "" : String(nutritionRawSheet.getRange(rawRow.row, NUTRITION_RAW_COL.CALENDAR_EVENT_ID).getValue() || "").trim();
+
+  let event = null;
+  if (oldEventId) {
+    try { event = cal.getEventById(oldEventId); } catch (e) {}
+  }
+  if (!event) {
+    event = findNutritionEventByDate_(cal, dateStr);
+    if (event) {
+      nutritionRawSheet.getRange(rawRow.row, NUTRITION_RAW_COL.CALENDAR_EVENT_ID).setValue(event.getId());
+      Logger.log(`nutritionWriteback: ${dateStr} 从日历补回 eventId → ${event.getId()}`);
+    }
+  }
+  if (!event) {
+    Logger.log(`nutritionWriteback: ${dateStr} 无事件，跳过回写`);
+    return;
+  }
+
+  const desc = event.getDescription() || "";
+  const parts = desc.split(CONFIG.NUTRITION.descSeparator);
+  const feedback = parts.length >= 2 ? parts[1].trim() : "";
+
+  const newPlan = totalStr + "\n" + deltaStr;
+  const newDesc = newPlan + CONFIG.NUTRITION.descSeparator + feedback;
+  if (newDesc !== desc) {
+    event.setDescription(newDesc);
+    Logger.log(`nutritionWriteback: ${dateStr} total/delta 写入事件完成`);
+  }
+
+  if (feedback) {
+    const summaryRow = findSummaryRowByDate_(summarySheet, dateStr, colMap, tz);
+    if (summaryRow) {
+      summarySheet.getRange(summaryRow, colOf_(colMap, CONFIG.SUMMARY_COLS.nutritionFeedback)).setValue(feedback);
+      Logger.log(`nutritionWriteback: ${dateStr} feedback 回写 Summarize 完成`);
+    }
+  }
+}
+
+// ── 生成当天空壳 nutrition event ────────────────────────────────
+
+function createNutritionShellEvent_(nutritionRawSheet, dateStr, tz) {
+  Logger.log(`nutritionShell: 开始生成 ${dateStr} 空壳事件`);
+
+  const cal = CalendarApp.getCalendarById(CONFIG.NUTRITION.calendarId);
+  if (!cal) {
+    Logger.log("nutritionShell: 找不到营养日历，跳过");
+    return;
+  }
+
+  const rowKey = dateStr.replace(/-/g, "");
+  const rawRow = findOrInsertRowByKey_(nutritionRawSheet, rowKey, NUTRITION_RAW_COL.ROW_KEY, 2);
+  const oldEventId = rawRow.inserted ? "" : String(nutritionRawSheet.getRange(rawRow.row, NUTRITION_RAW_COL.CALENDAR_EVENT_ID).getValue() || "").trim();
+
+  if (oldEventId) {
+    try {
+      const event = cal.getEventById(oldEventId);
+      if (event) {
+        Logger.log(`nutritionShell: ${dateStr} 事件已存在，跳过`);
+        return;
+      }
+    } catch (e) {
+      Logger.log(`nutritionShell: 旧事件获取失败，尝试搜索日历`);
+    }
+  }
+
+  const existing = findNutritionEventByDate_(cal, dateStr);
+  if (existing) {
+    nutritionRawSheet.getRange(rawRow.row, 1, 1, 5).setValues([[
+      rowKey, dateStr, existing.getId(), 1, Utilities.formatDate(new Date(), tz, "yyyy-MM-dd")
+    ]]);
+    Logger.log(`nutritionShell: ${dateStr} 日历已有事件，补回 eventId → ${existing.getId()}`);
+    return;
+  }
+
+  const title = `营养 ${dateStr}`;
+  const d = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const eventDate = new Date(Number(d[1]), Number(d[2]) - 1, Number(d[3]));
+
+  const newEvent = cal.createAllDayEvent(title, eventDate);
+  newEvent.setDescription(CONFIG.NUTRITION.descSeparator);
+  Utilities.sleep(500);
+
+  const newEventId = newEvent.getId();
+  const updatedAt = Utilities.formatDate(new Date(), tz, "yyyy-MM-dd");
+
+  nutritionRawSheet.getRange(rawRow.row, 1, 1, 5).setValues([[
+    rowKey, dateStr, newEventId, 1, updatedAt
+  ]]);
+
+  Logger.log(`nutritionShell: ✅ ${dateStr} 空壳事件创建完成 → ${newEventId}`);
+}
+
+// ── 按日期搜索营养日历事件 ──────────────────────────────────────
+
+function findNutritionEventByDate_(cal, dateStr) {
+  const d = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  const startOfDay = new Date(Number(d[1]), Number(d[2]) - 1, Number(d[3]));
+  const endOfDay = new Date(Number(d[1]), Number(d[2]) - 1, Number(d[3]) + 1);
+  const events = cal.getEvents(startOfDay, endOfDay);
+  for (const ev of events) {
+    if (ev.getTitle() === `营养 ${dateStr}`) return ev;
+  }
+  return null;
+}

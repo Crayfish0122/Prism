@@ -10,20 +10,22 @@ const CONFIG = {
     openRetrySleepMs:         1500,
     googleSheetId:            "1GHDKRvSl9p8iLCxYxK1bLmPwPt-3HRWkTpelxgBSJwY",
     workoutRawSheetName:      "workout_daily_raw",
+    nutritionRawSheetName:    "nutrition_daily_raw"
   },
 
   SUMMARY_COLS: {
-    sleepTime:       "sleep_start+wake_time",
-    sleepStages:     "InBed|Core|Deep|Rem|",
-    sleepResult:     "sleep_result",
-    weight:          "weight",
-    date:            "date",
-    rowKey:          "row_key",
-    workoutType:     "WorkoutType",
-    workoutDetail:   "WorkoutDetail",
-    nutritionTotal:  "nutrition_total",
-    workoutFeedback: "WorkoutFeedback",
-    nutritionDelta:  "nutrition_delta",
+    sleepTime:         "sleep_start+wake_time",
+    sleepStages:       "InBed|Core|Deep|Rem|",
+    sleepResult:       "sleep_result",
+    weight:            "weight",
+    date:              "date",
+    rowKey:            "row_key",
+    workoutType:       "WorkoutType",
+    workoutDetail:     "WorkoutDetail",
+    nutritionTotal:    "nutrition_total",
+    workoutFeedback:   "WorkoutFeedback",
+    nutritionDelta:    "nutrition_delta",
+    nutritionFeedback: "NutritionFeedback"
   },
 
   SLEEP_CONFIG_KEYS: {
@@ -43,6 +45,10 @@ const CONFIG = {
 
   WORKOUT: {
     calendarId:    "3cd7de319e1fb15788ec3e0dcd4ad483f8440550cd6fda1bd1f9adad67139a45@group.calendar.google.com",
+    descSeparator: "\n===\n",
+  },
+  NUTRITION: {
+    calendarId:    "1b21c31b0dbf035b218cd5c60d2105c1d08e5ae5c7d28692859181ef446f80ea@group.calendar.google.com", 
     descSeparator: "\n===\n",
   },
 };
