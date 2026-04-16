@@ -44,7 +44,6 @@ function HealthNutritionSync() {
       Logger.log(`实际营养: kcal=${actual.kcal} carb=${actual.carb} protein=${actual.protein} fat=${actual.fat}`);
 
       const colMap = getColMapFromHeader(summarySheet, 1);
-      assertNutritionSummaryCols_(colMap);
       assertSummaryCols_(colMap, [
         CONFIG.SUMMARY_COLS.date,
         CONFIG.SUMMARY_COLS.workoutFeedback,
@@ -264,8 +263,7 @@ function createNutritionShellEvent_(nutritionRawSheet, dateStr, tz) {
   }
 
   const title = `营养 ${dateStr}`;
-  const d = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  const eventDate = new Date(Number(d[1]), Number(d[2]) - 1, Number(d[3]));
+  const eventDate = parseYmdToDate_(dateStr);
 
   const newEvent = cal.createAllDayEvent(title, eventDate);
   newEvent.setDescription(CONFIG.NUTRITION.descSeparator);
@@ -296,9 +294,8 @@ function findNutritionEvent_(cal, dateStr, eventId) {
 // ── 按日期搜索营养日历事件 ──────────────────────────────────────
 
 function findNutritionEventByDate_(cal, dateStr) {
-  const d = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  const startOfDay = new Date(Number(d[1]), Number(d[2]) - 1, Number(d[3]));
-  const endOfDay = new Date(Number(d[1]), Number(d[2]) - 1, Number(d[3]) + 1);
+  const startOfDay = parseYmdToDate_(dateStr);
+  const endOfDay   = addDays(startOfDay, 1);
   const events = cal.getEvents(startOfDay, endOfDay);
   for (const ev of events) {
     if (ev.getTitle() === `营养 ${dateStr}`) return ev;
