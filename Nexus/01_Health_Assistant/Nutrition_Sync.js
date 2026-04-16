@@ -45,6 +45,13 @@ function HealthNutritionSync() {
 
       const colMap = getColMapFromHeader(summarySheet, 1);
       assertNutritionSummaryCols_(colMap);
+      assertSummaryCols_(colMap, [
+        CONFIG.SUMMARY_COLS.date,
+        CONFIG.SUMMARY_COLS.workoutFeedback,
+        CONFIG.SUMMARY_COLS.nutritionTotal,
+        CONFIG.SUMMARY_COLS.nutritionDelta,
+        CONFIG.SUMMARY_COLS.nutritionFeedback,
+        ], "HealthNutritionSync");
       Logger.log("HealthNutritionSync: summary 列头校验通过");
 
       const isTraining = getIsTrainingDay(summarySheet, targetStr, colMap, tz);
@@ -195,20 +202,16 @@ function writebackNutritionEvent_(nutritionRawSheet, summarySheet, dateStr, tota
   const rawRow = findOrInsertRowByKey_(nutritionRawSheet, rowKey, NUTRITION_RAW_COL.ROW_KEY, 2);
   const oldEventId = rawRow.inserted ? "" : String(nutritionRawSheet.getRange(rawRow.row, NUTRITION_RAW_COL.CALENDAR_EVENT_ID).getValue() || "").trim();
 
-  let event = null;
-  if (oldEventId) {
-    try { event = cal.getEventById(oldEventId); } catch (e) {}
-  }
-  if (!event) {
-    event = findNutritionEventByDate_(cal, dateStr);
-    if (event) {
-      nutritionRawSheet.getRange(rawRow.row, NUTRITION_RAW_COL.CALENDAR_EVENT_ID).setValue(event.getId());
-      Logger.log(`nutritionWriteback: ${dateStr} 从日历补回 eventId → ${event.getId()}`);
-    }
-  }
+  const event = findNutritionEvent_(cal, dateStr, oldEventId);
   if (!event) {
     Logger.log(`nutritionWriteback: ${dateStr} 无事件，跳过回写`);
     return;
+  }
+
+  const newEventId = event.getId();
+  if (newEventId !== oldEventId) {
+    nutritionRawSheet.getRange(rawRow.row, NUTRITION_RAW_COL.CALENDAR_EVENT_ID).setValue(newEventId);
+    Logger.log(`nutritionWriteback: ${dateStr} 从日历补回 eventId → ${newEventId}`);
   }
 
   const desc = event.getDescription() || "";
@@ -246,24 +249,17 @@ function createNutritionShellEvent_(nutritionRawSheet, dateStr, tz) {
   const rawRow = findOrInsertRowByKey_(nutritionRawSheet, rowKey, NUTRITION_RAW_COL.ROW_KEY, 2);
   const oldEventId = rawRow.inserted ? "" : String(nutritionRawSheet.getRange(rawRow.row, NUTRITION_RAW_COL.CALENDAR_EVENT_ID).getValue() || "").trim();
 
-  if (oldEventId) {
-    try {
-      const event = cal.getEventById(oldEventId);
-      if (event) {
-        Logger.log(`nutritionShell: ${dateStr} 事件已存在，跳过`);
-        return;
-      }
-    } catch (e) {
-      Logger.log(`nutritionShell: 旧事件获取失败，尝试搜索日历`);
-    }
-  }
-
-  const existing = findNutritionEventByDate_(cal, dateStr);
+  const existing = findNutritionEvent_(cal, dateStr, oldEventId);
   if (existing) {
+    const existingId = existing.getId();
+    if (existingId === oldEventId) {
+      Logger.log(`nutritionShell: ${dateStr} 事件已存在，跳过`);
+      return;
+    }
     nutritionRawSheet.getRange(rawRow.row, 1, 1, 5).setValues([[
-      rowKey, dateStr, existing.getId(), 1, Utilities.formatDate(new Date(), tz, "yyyy-MM-dd")
+      rowKey, dateStr, existingId, 1, Utilities.formatDate(new Date(), tz, "yyyy-MM-dd")
     ]]);
-    Logger.log(`nutritionShell: ${dateStr} 日历已有事件，补回 eventId → ${existing.getId()}`);
+    Logger.log(`nutritionShell: ${dateStr} 日历已有事件，补回 eventId → ${existingId}`);
     return;
   }
 
@@ -285,6 +281,18 @@ function createNutritionShellEvent_(nutritionRawSheet, dateStr, tz) {
   Logger.log(`nutritionShell: ✅ ${dateStr} 空壳事件创建完成 → ${newEventId}`);
 }
 
+// ── 事件查找（先按 eventId、失败按日期兜底） ──────────────────
+
+function findNutritionEvent_(cal, dateStr, eventId) {
+  if (eventId) {
+    try {
+      const event = cal.getEventById(eventId);
+      if (event) return event;
+    } catch (e) {}
+  }
+  return findNutritionEventByDate_(cal, dateStr);
+}
+
 // ── 按日期搜索营养日历事件 ──────────────────────────────────────
 
 function findNutritionEventByDate_(cal, dateStr) {
@@ -296,18 +304,4 @@ function findNutritionEventByDate_(cal, dateStr) {
     if (ev.getTitle() === `营养 ${dateStr}`) return ev;
   }
   return null;
-}
-
-function assertNutritionSummaryCols_(colMap) {
-  const required = [
-    CONFIG.SUMMARY_COLS.date,
-    CONFIG.SUMMARY_COLS.workoutFeedback,
-    CONFIG.SUMMARY_COLS.nutritionTotal,
-    CONFIG.SUMMARY_COLS.nutritionDelta,
-    CONFIG.SUMMARY_COLS.nutritionFeedback,
-  ];
-  const missing = required.filter(k => !colOf_(colMap, k));
-  if (missing.length > 0) {
-    throw new Error(`HealthNutritionSync: 总结页找不到列标题: ${missing.join(", ")}`);
-  }
 }
