@@ -38,11 +38,8 @@ function ymd(d) {
 }
 
 function getYesterdayInTz() {
-  // 获取配置时区下的“昨天”的 Date 对象
-  const now = new Date();
-  const ymdText = ymd(now); // 直接调用已经封装好的 ymd() 函数，清爽多了！
-  const [y, m, d] = ymdText.split("-").map(Number);
-  return new Date(y, m - 1, d - 1);
+  // 获取配置时区下的"昨天"的 Date 对象
+  return addDays(getTodayInTz(), -1);
 }
 
 function getTodayInTz() {
@@ -74,6 +71,13 @@ function parseDateSafe(s, fallbackDate) {
   m = str.match(/^(\d{1,2})[\/\-](\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
   if (m) return new Date(fallbackDate.getFullYear(), Number(m[1])-1, Number(m[2]), Number(m[3]), Number(m[4]), m[5] ? Number(m[5]) : 0);
   return null;
+}
+
+function parseYmdToDate_(dateStr) {
+  // 把 "yyyy-MM-dd" 字符串解析为本地时区当日零点的 Date 对象
+  const m = String(dateStr).match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (!m) throw new Error(`parseYmdToDate_ 非法日期字符串: ${dateStr}`);
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
 }
 
 // ── 型変換 ──────────────────────────────────────────────────
