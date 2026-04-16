@@ -1,5 +1,15 @@
 ## 变更履历
 
+### [v0.1.2] - 2026-04-16
+
+修改
+
+在 Utils.js 重构 getYesterdayInTz，改为调用 getTodayInTz 和 addDays 组合实现，消除与 getTodayInTz 函数体重复的日期构造代码。
+
+在 Workout_Sync.js 新增 getSummaryCellByDate_ 通用函数，合并 getWorkoutTypeFromSummary_ 和 getWorkoutDetailFromSummary_ 两个结构相同的读取函数。列名从函数内部提到调用方作为参数传入，readbackWorkoutFeedback_ 和 syncWorkoutCalendar_ 的三处调用同步更新。
+
+在 Utils.js 新增 parseYmdToDate_ 工具函数，封装 yyyy-MM-dd 字符串到本地零点 Date 对象的解析。Workout_Sync.js 的 createWorkoutEvent_、findWorkoutEvent_、findWorkoutEventByExactTitle_ 以及 Nutrition_Sync.js 的 createNutritionShellEvent_、findNutritionEventByDate_ 共五处调用已替换，endOfDay 统一改用 addDays 计算。
+
 ### [v0.1.1] - 2026-04-16
 
 修改
