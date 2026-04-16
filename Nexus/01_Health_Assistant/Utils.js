@@ -322,9 +322,6 @@ function textResponse(s) {
 }
 
 // ── 调试 ────────────────────────────────────────────────────
-// ════════════════════════════════════════════════════════════
-//  utils_sync.gs  —  临时表覆盖目标 Google Sheet
-// ════════════════════════════════════════════════════════════
 
 function syncTempSSToGoogleSheet(tempSSId) {
   const targetSSId = CONFIG.TARGET.googleSheetId;
@@ -346,4 +343,13 @@ function syncTempSSToGoogleSheet(tempSSId) {
 
   SpreadsheetApp.flush();
   Logger.log(`✅ Google Sheet 同步完成 → ${targetSSId}`);
+  }
+
+// ── Summary 列头校验 ────────────────────────────────────────
+
+function assertSummaryCols_(colMap, requiredKeys, moduleName) {
+  const missing = requiredKeys.filter(k => !colOf_(colMap, k));
+  if (missing.length > 0) {
+    throw new Error(`${moduleName}: 总结页找不到列标题: ${missing.join(", ")}`);
+  }
 }
