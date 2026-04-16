@@ -57,7 +57,7 @@ function HealthWorkoutSync() {
 function readbackWorkoutFeedback_(summarySheet, workoutRawSheet, dateStr, colMap, tz) {
   Logger.log(`readback: 开始回写 ${dateStr}`);
 
-  const workoutType = getWorkoutTypeFromSummary_(summarySheet, dateStr, colMap, tz);
+  const workoutType = getSummaryCellByDate_(summarySheet, dateStr, CONFIG.SUMMARY_COLS.workoutType, colMap, tz);
   if (!workoutType) {
     Logger.log(`readback: ${dateStr} WorkoutType 为空，跳过`);
     return;
@@ -110,8 +110,8 @@ function readbackWorkoutFeedback_(summarySheet, workoutRawSheet, dateStr, colMap
 function syncWorkoutCalendar_(summarySheet, workoutRawSheet, dateStr, colMap, tz) {
   Logger.log(`syncWorkout: 开始生成 ${dateStr} event`);
 
-  const workoutType   = getWorkoutTypeFromSummary_(summarySheet, dateStr, colMap, tz);
-  const workoutDetail = getWorkoutDetailFromSummary_(summarySheet, dateStr, colMap, tz);
+  const workoutType   = getSummaryCellByDate_(summarySheet, dateStr, CONFIG.SUMMARY_COLS.workoutType, colMap, tz);
+  const workoutDetail = getSummaryCellByDate_(summarySheet, dateStr, CONFIG.SUMMARY_COLS.workoutDetail, colMap, tz);
 
   if (!workoutType) {
     Logger.log(`syncWorkout: ${dateStr} WorkoutType 为空，跳过`);
@@ -189,8 +189,7 @@ function createWorkoutEvent_(workoutRawSheet, rawRowNo, dateStr, workoutType, pl
 
   const title       = buildWorkoutEventTitle(dateStr, workoutType);
   const description = plan + CONFIG.WORKOUT.descSeparator + feedback;
-  const d           = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  const eventDate   = new Date(Number(d[1]), Number(d[2]) - 1, Number(d[3]));
+  const eventDate   = parseYmdToDate_(dateStr);
 
   const newEvent = cal.createAllDayEvent(title, eventDate);
   newEvent.setDescription(description);
@@ -213,16 +212,10 @@ function buildWorkoutEventTitle(dateStr, workoutType) {
   return `${workoutType} ${dateStr}`;
 }
 
-function getWorkoutTypeFromSummary_(summarySheet, dateStr, colMap, tz) {
-  const row = findSummaryRowByDate_(summarySheet, dateStr, colMap, tz);
+function getSummaryCellByDate_(sheet, dateStr, colKey, colMap, tz) {
+  const row = findSummaryRowByDate_(sheet, dateStr, colMap, tz);
   if (!row) return "";
-  return String(summarySheet.getRange(row, colOf_(colMap, CONFIG.SUMMARY_COLS.workoutType)).getValue() || "").trim();
-}
-
-function getWorkoutDetailFromSummary_(summarySheet, dateStr, colMap, tz) {
-  const row = findSummaryRowByDate_(summarySheet, dateStr, colMap, tz);
-  if (!row) return "";
-  return String(summarySheet.getRange(row, colOf_(colMap, CONFIG.SUMMARY_COLS.workoutDetail)).getValue() || "").trim();
+  return String(sheet.getRange(row, colOf_(colMap, colKey)).getValue() || "").trim();
 }
 
 // 优先用 raw 里的 eventId 精确查找；没有时再按日期兜底
@@ -237,9 +230,8 @@ function findWorkoutEvent_(cal, dateStr, eventId, tz) {
     }
   }
 
-  const d          = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  const startOfDay = new Date(Number(d[1]), Number(d[2]) - 1, Number(d[3]));
-  const endOfDay   = new Date(Number(d[1]), Number(d[2]) - 1, Number(d[3]) + 1);
+  const startOfDay = parseYmdToDate_(dateStr);
+  const endOfDay   = addDays(startOfDay, 1);
   const events     = cal.getEvents(startOfDay, endOfDay);
 
   for (const ev of events) {
@@ -250,9 +242,8 @@ function findWorkoutEvent_(cal, dateStr, eventId, tz) {
 
 // oldEventId 为空或失效时，按“当天 + 精确标题”补查，防止重复创建
 function findWorkoutEventByExactTitle_(cal, dateStr, expectTitle) {
-  const d          = dateStr.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  const startOfDay = new Date(Number(d[1]), Number(d[2]) - 1, Number(d[3]));
-  const endOfDay   = new Date(Number(d[1]), Number(d[2]) - 1, Number(d[3]) + 1);
+  const startOfDay = parseYmdToDate_(dateStr);
+  const endOfDay   = addDays(startOfDay, 1);
   const events     = cal.getEvents(startOfDay, endOfDay);
 
   for (const ev of events) {
