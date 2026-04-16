@@ -60,24 +60,6 @@ function addDays(date, n) {
   return d;
 }
 
-function dateKeyToDate(key) {
-  // 把字符串型的日期（如 "2023-10-24"）转回成真实的 Date 对象
-  const k = normalizeDateCellToKey_(key, CONFIG.TZ);
-  const m = String(k || "").match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  if (!m) throw new Error(`非法 dateKey: ${key}`);
-  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-}
-
-function parseDatetimeWithAt(cell) {
-  // 处理带有 "at" 的奇葩日期字符串（比如 "2023-10-24 at 15:30"）
-  if (!cell) return null;
-  if (cell instanceof Date) return cell; // 如果本来就是日期格式，直接返回
-  const s = String(cell).trim();
-  if (!s) return null;
-  const dt = new Date(s.replace(/\s+at\s+/i, " ")); // 把 " at " 替换成空格后再解析
-  return isNaN(dt.getTime()) ? null : dt; // 解析失败返回 null
-}
-
 function parseDateSafe(s, fallbackDate) {
   // 终极日期解析器：尝试用各种正则表达式去匹配常见的日期格式（带杠的、带斜杠的、带时分秒的等）
   const str = String(s).trim();
@@ -95,20 +77,6 @@ function parseDateSafe(s, fallbackDate) {
 }
 
 // ── 型変換 ──────────────────────────────────────────────────
-
-function toKey(v) {
-  if (v instanceof Date) return ymd(v);
-  if (typeof v === "string") {
-    const s = v.trim();
-    const m = s.match(/令和\s*(\d+)\s*年\s*(\d+)\s*月\s*(\d+)\s*日/);
-    if (m) {
-      const year = 2018 + Number(m[1]);
-      return `${year}-${String(Number(m[2])).padStart(2,"0")}-${String(Number(m[3])).padStart(2,"0")}`;
-    }
-    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
-  }
-  return "";
-}
 
 function toNum(v) {
   if (typeof v === "number") return v;
@@ -149,50 +117,6 @@ function normalizeSleepType(type) {
   if (s.indexOf("rem")  >= 0) return "REM";
   if (s.indexOf("in bed") >= 0 || s.indexOf("inbed") >= 0) return "INBED";
   return "OTHER";
-}
-
-function toDurationDayFraction(v) {
-  if (v == null || v === "") return null;
-  if (typeof v === "number") return v;
-  if (v instanceof Date) {
-    return (v.getHours() * 3600 + v.getMinutes() * 60 + v.getSeconds()) / 86400;
-  }
-  const s = String(v).trim();
-  const m = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
-  if (m) {
-    return (parseInt(m[1],10)*3600 + parseInt(m[2],10)*60 + (m[3] ? parseInt(m[3],10) : 0)) / 86400;
-  }
-  return v;
-}
-
-function toDateTimeSerialInTz(v, tz, fallbackYmd) {
-  if (v == null || v === "") return null;
-  let ymdText, hmsText;
-  if (v instanceof Date) {
-    ymdText = Utilities.formatDate(v, tz, "yyyy-MM-dd");
-    hmsText = Utilities.formatDate(v, tz, "HH:mm:ss");
-  } else {
-    const s = String(v).trim();
-    const m1 = s.match(/^(\d{1,2})\/(\d{1,2})\s+(\d{1,2}):(\d{2})(?::(\d{2}))?$/);
-    if (m1) {
-      const yy = fallbackYmd ? fallbackYmd.slice(0,4) : String(new Date().getFullYear());
-      ymdText = `${yy}-${String(parseInt(m1[1],10)).padStart(2,"0")}-${String(parseInt(m1[2],10)).padStart(2,"0")}`;
-      hmsText = `${String(parseInt(m1[3],10)).padStart(2,"0")}:${String(parseInt(m1[4],10)).padStart(2,"0")}:${String(m1[5] ? parseInt(m1[5],10) : 0).padStart(2,"0")}`;
-    } else {
-      const dt = new Date(s.replace(/\s+at\s+/i, " "));
-      if (isNaN(dt.getTime())) return null;
-      ymdText = Utilities.formatDate(dt, tz, "yyyy-MM-dd");
-      hmsText = Utilities.formatDate(dt, tz, "HH:mm:ss");
-    }
-  }
-  const ym = ymdText.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-  const hm = hmsText.match(/^(\d{2}):(\d{2}):(\d{2})$/);
-  if (!ym || !hm) return null;
-  const base = Date.UTC(1899, 11, 30);
-  const day0 = Date.UTC(parseInt(ym[1],10), parseInt(ym[2],10)-1, parseInt(ym[3],10));
-  const days = (day0 - base) / 86400000;
-  const frac = (parseInt(hm[1],10)*3600 + parseInt(hm[2],10)*60 + parseInt(hm[3],10)) / 86400;
-  return days + frac;
 }
 
 // ── 日付文字列正規化 ─────────────────────────────────────────
@@ -263,34 +187,6 @@ function getColMapFromHeader(sheet, headerRow) {
 
 function colOf_(colMap, key) {
   return colMap[key.toLowerCase()];
-}
-
-function findRowByDate(sheet, targetStr, tz) {
-  const maxRows = Math.min(sheet.getLastRow(), 600);
-  if (maxRows <= 1) return null;
-  const values = sheet.getRange(1, 1, maxRows, 3).getValues();
-  for (let r = 0; r < values.length; r++) {
-    for (let c = 0; c < 3; c++) {
-      const cell = values[r][c];
-      if (!cell) continue;
-      if (cell instanceof Date) {
-        if (Utilities.formatDate(cell, tz, "yyyy-MM-dd") === targetStr) return r + 1;
-      } else {
-        const s = String(cell).trim();
-        if (s === targetStr) return r + 1;
-        const dt = new Date(s);
-        if (!isNaN(dt.getTime()) && Utilities.formatDate(dt, tz, "yyyy-MM-dd") === targetStr) return r + 1;
-      }
-    }
-  }
-  return null;
-}
-
-function getSheetOrFirst(ss, name, tag) {
-  let sheet = name ? ss.getSheetByName(name) : null;
-  if (!sheet) sheet = ss.getSheets()[0];
-  Logger.log(`ℹ️ [${tag}] 使用工作表: ${sheet.getName()}`);
-  return sheet;
 }
 
 function getSheetStrict(ss, sheetName) {
