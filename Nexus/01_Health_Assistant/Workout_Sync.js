@@ -33,7 +33,12 @@ function HealthWorkoutSync() {
       const workoutRawSheet = getSheetStrict(tempSS, CONFIG.TARGET.workoutRawSheetName);
       const colMap          = getColMapFromHeader(summarySheet, 1);
 
-      assertWorkoutSummaryCols_(colMap);
+      assertSummaryCols_(colMap, [
+        CONFIG.SUMMARY_COLS.date,
+        CONFIG.SUMMARY_COLS.workoutType,
+        CONFIG.SUMMARY_COLS.workoutDetail,
+        CONFIG.SUMMARY_COLS.workoutFeedback,
+        ], "HealthWorkoutSync");
       Logger.log("HealthWorkoutSync: summary 列头校验通过");
 
       readbackWorkoutFeedback_(summarySheet, workoutRawSheet, yesterdayStr, colMap, tz);
@@ -131,21 +136,8 @@ function syncWorkoutCalendar_(summarySheet, workoutRawSheet, dateStr, colMap, tz
     try {
       const event = cal.getEventById(oldEventId);
       if (event) {
-        const existDesc     = event.getDescription() || "";
-        const existParts    = existDesc.split(CONFIG.WORKOUT.descSeparator);
-        const existPlan     = (existParts[0] || "").trim();
-        const existFeedback = existParts.length >= 2 ? existParts.slice(1).join(CONFIG.WORKOUT.descSeparator) : "";
-
-        if (event.getTitle() === expectTitle && existPlan === expectPlan) {
-          Logger.log(`syncWorkout: ${dateStr} 内容一致，跳过`);
-          return;
-        }
-
-        event.setTitle(expectTitle);
-        event.setDescription(expectPlan + CONFIG.WORKOUT.descSeparator + existFeedback);
-        Logger.log(`syncWorkout: ${dateStr} 计划变更，原地更新事件 ${oldEventId}`);
+        updateWorkoutEventIfChanged_(event, expectTitle, expectPlan, dateStr, "oldId 命中");
         return;
-
       }
 
       Logger.log(`syncWorkout: oldEventId=${oldEventId} 未命中，改走精确标题补查`);
@@ -154,7 +146,7 @@ function syncWorkoutCalendar_(summarySheet, workoutRawSheet, dateStr, colMap, tz
     }
   }
 
-  // oldEventId 为空或失效时，先按“当天 + 精确标题”补查，避免重复建 event
+  // oldEventId 为空或失效时，先按"当天 + 精确标题"补查，避免重复建 event
   const fallbackEvent = findWorkoutEventByExactTitle_(cal, dateStr, expectTitle);
   if (fallbackEvent) {
     const fallbackEventId = fallbackEvent.getId();
@@ -163,23 +155,30 @@ function syncWorkoutCalendar_(summarySheet, workoutRawSheet, dateStr, colMap, tz
       Logger.log(`syncWorkout: 补查命中已有事件，回填 eventId ${oldEventId} → ${fallbackEventId}`);
     }
 
-    const existDesc     = fallbackEvent.getDescription() || "";
-    const existParts    = existDesc.split(CONFIG.WORKOUT.descSeparator);
-    const existPlan     = (existParts[0] || "").trim();
-    const existFeedback = existParts.length >= 2 ? existParts.slice(1).join(CONFIG.WORKOUT.descSeparator) : "";
-
-    if (fallbackEvent.getTitle() === expectTitle && existPlan === expectPlan) {
-      Logger.log(`syncWorkout: ${dateStr} 已存在同标题事件，回填ID后跳过`);
-      return;
-    }
-
-    fallbackEvent.setTitle(expectTitle);
-    fallbackEvent.setDescription(expectPlan + CONFIG.WORKOUT.descSeparator + existFeedback);
-    Logger.log(`syncWorkout: ${dateStr} 补查命中旧事件但内容已变更，原地更新`);
+    updateWorkoutEventIfChanged_(fallbackEvent, expectTitle, expectPlan, dateStr, "补查命中");
     return;
   }
 
   createWorkoutEvent_(workoutRawSheet, rawRow.row, dateStr, workoutType, expectPlan, "", tz);
+}
+
+// ── event 原地更新（内容变更时）──────────────────────────────
+
+// 比较 title 和 plan，完全一致则跳过；任一不同则原地更新 title 和 description，feedback 段保持不变
+function updateWorkoutEventIfChanged_(event, expectTitle, expectPlan, dateStr, logTag) {
+  const existDesc     = event.getDescription() || "";
+  const existParts    = existDesc.split(CONFIG.WORKOUT.descSeparator);
+  const existPlan     = (existParts[0] || "").trim();
+  const existFeedback = existParts.length >= 2 ? existParts.slice(1).join(CONFIG.WORKOUT.descSeparator) : "";
+
+  if (event.getTitle() === expectTitle && existPlan === expectPlan) {
+    Logger.log(`syncWorkout: ${dateStr} ${logTag} 内容一致，跳过`);
+    return;
+  }
+
+  event.setTitle(expectTitle);
+  event.setDescription(expectPlan + CONFIG.WORKOUT.descSeparator + existFeedback);
+  Logger.log(`syncWorkout: ${dateStr} ${logTag} 计划变更，原地更新事件 ${event.getId()}`);
 }
 
 // ── event 创建 ────────────────────────────────────────────────
@@ -260,17 +259,4 @@ function findWorkoutEventByExactTitle_(cal, dateStr, expectTitle) {
     if (ev.getTitle() === expectTitle) return ev;
   }
   return null;
-}
-
-function assertWorkoutSummaryCols_(colMap) {
-  const required = [
-    CONFIG.SUMMARY_COLS.date,
-    CONFIG.SUMMARY_COLS.workoutType,
-    CONFIG.SUMMARY_COLS.workoutDetail,
-    CONFIG.SUMMARY_COLS.workoutFeedback,
-  ];
-  const missing = required.filter(k => !colOf_(colMap, k));
-  if (missing.length > 0) {
-    throw new Error(`HealthWorkoutSync: 总结页找不到列标题: ${missing.join(", ")}`);
-  }
 }
